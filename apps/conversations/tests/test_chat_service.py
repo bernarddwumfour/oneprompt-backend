@@ -1,0 +1,95 @@
+from decimal import Decimal
+from unittest.mock import patch
+
+from django.core.cache import cache
+from django.test import TestCase
+
+from apps.accounts.tests.factories import UserFactory
+from apps.conversations.models import Message, ModelInvocation
+from apps.conversations.services.chat_service import send_message
+from apps.conversations.tests.factories import ConversationFactory
+from apps.credits.models import CreditWallet
+from apps.credits.services.ledger_service import promotional_credit
+
+
+class ChatServiceTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = UserFactory()
+        self.wallet = CreditWallet.objects.create(user=self.user, currency="USD")
+        self.conversation = ConversationFactory(user=self.user)
+
+        sleep_patcher = patch("apps.providers.stub_provider.time.sleep")
+        sleep_patcher.start()
+        self.addCleanup(sleep_patcher.stop)
+
+    def _fund(self, amount="5.00", key="fund"):
+        promotional_credit(
+            wallet=self.wallet, amount=Decimal(amount), idempotency_key=key, reference={}
+        )
+
+    def test_happy_path_charges_wallet_and_resolves_reservation(self):
+        self._fund()
+
+        gen = send_message(conversation=self.conversation, user=self.user, prompt="Hello there")
+        events = list(gen)
+        event_types = [e[0] for e in events]
+
+        self.assertEqual(event_types[0], "start")
+        self.assertEqual(event_types[-1], "done")
+
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.reserved, Decimal("0.00"))
+        self.assertLess(self.wallet.balance, Decimal("5.00"))
+
+        invocation = ModelInvocation.objects.get(conversation=self.conversation)
+        self.assertEqual(invocation.status, "succeeded")
+        self.assertIsNotNone(invocation.capture_entry)
+        self.assertEqual(
+            Message.objects.filter(conversation=self.conversation, role="assistant").count(), 1
+        )
+
+    def test_insufficient_balance_raises_before_creating_any_rows(self):
+        # Wallet has zero balance — no funding.
+        with self.assertRaises(ValueError):
+            send_message(conversation=self.conversation, user=self.user, prompt="Hello")
+
+        self.assertEqual(ModelInvocation.objects.filter(conversation=self.conversation).count(), 0)
+        self.assertEqual(Message.objects.filter(conversation=self.conversation).count(), 0)
+
+    def test_unknown_capability_raises_immediately(self):
+        self._fund()
+        with self.assertRaises(ValueError):
+            send_message(
+                conversation=self.conversation,
+                user=self.user,
+                prompt="hi",
+                capability="does-not-exist",
+            )
+
+    def test_cancellation_releases_credits_and_marks_invocation_cancelled(self):
+        self._fund()
+
+        gen = send_message(
+            conversation=self.conversation,
+            user=self.user,
+            prompt="Hello there, how are you today?",
+        )
+        start_event = next(gen)
+        self.assertEqual(start_event[0], "start")
+        invocation_id = start_event[1]["invocation_id"]
+
+        next(gen)  # consume one chunk before cancelling
+        cache.set(f"cancel:{invocation_id}", True, timeout=60)
+        remaining_events = [e[0] for e in gen]
+        self.assertIn("cancelled", remaining_events)
+
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal("5.00"))
+        self.assertEqual(self.wallet.reserved, Decimal("0.00"))
+
+        invocation = ModelInvocation.objects.get(id=invocation_id)
+        self.assertEqual(invocation.status, "cancelled")
+        self.assertEqual(
+            Message.objects.filter(conversation=self.conversation, role="assistant").count(), 0
+        )
