@@ -22,16 +22,48 @@ def validate_send_message(data: dict) -> dict:
     if not prompt:
         errors["prompt"] = "Prompt is required."
 
-    capability = (data.get("capability") or "").strip()
-    if capability:
+    model_prompt = (data.get("model_prompt") or prompt).strip()
+    if not model_prompt:
+        errors["model_prompt"] = "Message must include text in addition to model mentions."
+
+    raw_capabilities = data.get("capabilities")
+    if raw_capabilities is None:
+        legacy_capability = (data.get("capability") or "").strip()
+        capabilities = [legacy_capability] if legacy_capability else []
+    elif not isinstance(raw_capabilities, list):
+        capabilities = []
+        errors["capabilities"] = "Must be a list of model capabilities."
+    else:
+        capabilities = [
+            str(capability).strip()
+            for capability in raw_capabilities
+            if str(capability).strip()
+        ]
+
+    capabilities = list(dict.fromkeys(capabilities))
+    if len(capabilities) > 3:
+        errors["capabilities"] = "You can reference at most 3 models."
+
+    if capabilities:
         from apps.providers.registry import get_provider
 
-        if get_provider(capability) is None:
-            errors["capability"] = f"Unknown or unavailable capability: {capability}"
+        unavailable = [
+            capability
+            for capability in capabilities
+            if get_provider(capability) is None
+        ]
+        if unavailable:
+            errors["capabilities"] = (
+                f"Unknown or unavailable capabilities: {', '.join(unavailable)}"
+            )
 
     if errors:
         raise ValidationError(errors)
-    return {"prompt": prompt, "capability": capability or None}
+    return {
+        "prompt": prompt,
+        "model_prompt": model_prompt,
+        "capabilities": capabilities,
+    }
 
 
 def serialize_conversation(conversation: Conversation) -> dict:

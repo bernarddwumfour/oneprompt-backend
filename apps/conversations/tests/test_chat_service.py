@@ -35,8 +35,9 @@ class ChatServiceTests(TestCase):
         events = list(gen)
         event_types = [e[0] for e in events]
 
-        self.assertEqual(event_types[0], "start")
-        self.assertEqual(event_types[-1], "done")
+        self.assertEqual(event_types[0], "batch_start")
+        self.assertIn("done", event_types)
+        self.assertEqual(event_types[-1], "complete")
 
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.reserved, Decimal("0.00"))
@@ -76,8 +77,8 @@ class ChatServiceTests(TestCase):
             prompt="Hello there, how are you today?",
         )
         start_event = next(gen)
-        self.assertEqual(start_event[0], "start")
-        invocation_id = start_event[1]["invocation_id"]
+        self.assertEqual(start_event[0], "batch_start")
+        invocation_id = start_event[1]["invocations"][0]["invocation_id"]
 
         next(gen)  # consume one chunk before cancelling
         cache.set(f"cancel:{invocation_id}", True, timeout=60)

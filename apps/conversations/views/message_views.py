@@ -51,8 +51,9 @@ def send_message_view(request, conversation_id):
         gen = send_message(
             conversation=conversation,
             user=request.user,
-            prompt=cleaned["prompt"],
-            capability=cleaned.get("capability", "fast"),
+            prompt=cleaned["model_prompt"],
+            message_content=cleaned["prompt"],
+            capabilities=cleaned["capabilities"],
         )
     except ValueError as e:
         return APIResponse.bad_request(str(e))

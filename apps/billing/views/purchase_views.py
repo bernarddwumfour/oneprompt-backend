@@ -14,7 +14,8 @@ from apps.billing.selectors.purchase_selectors import (
     get_purchase_for_user,
     list_active_credit_packs,
 )
-from apps.billing.services.purchase_service import create_purchase
+from apps.billing.services.paystack_client import PaystackError
+from apps.billing.services.purchase_service import create_purchase, settle_purchase
 from common.decorators import jwt_required
 from common.responses import APIResponse
 
@@ -57,12 +58,29 @@ def create_purchase_view(request):
 
 
 @csrf_exempt
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "POST"])
 @jwt_required
 def purchase_detail_view(request, purchase_id):
-    """GET /billing/purchases/{id} — poll for purchase status."""
+    """GET /billing/purchases/{id} — read current purchase status.
+
+    POST /billing/purchases/{id} — verify-on-return: synchronously re-check
+    with Paystack right now instead of only waiting on the webhook, which
+    can't reach a local dev server at all (and can be slow/lost even in
+    production). This is what the frontend's /billing/return page calls the
+    moment the user's browser lands back from Paystack's checkout.
+    Idempotent — safe to call more than once for the same purchase.
+    """
     purchase = get_purchase_for_user(purchase_id, request.user)
     if purchase is None:
         return APIResponse.not_found("Purchase not found.")
+
+    if request.method == "POST":
+        try:
+            purchase = settle_purchase(purchase=purchase)
+        except PaystackError as e:
+            logger.error("Verify-on-return failed for purchase %s: %s", purchase_id, e)
+            return APIResponse.server_error(
+                "Unable to verify payment right now. Please try again shortly."
+            )
 
     return APIResponse.success(data={"purchase": serialize_purchase(purchase)})

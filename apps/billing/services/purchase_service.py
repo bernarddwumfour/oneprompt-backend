@@ -102,39 +102,34 @@ def create_purchase(*, user, credit_pack_id: str) -> dict:
 
 
 @transaction.atomic
-def confirm_purchase(
-    *, reference: str, raw_body: bytes, signature: str, webhook_body: dict
-) -> Purchase:
-    """Process a Paystack webhook: verify signature, verify with Paystack,
-    credit wallet exactly once.
+def settle_purchase(*, purchase: Purchase, webhook_body: dict | None = None) -> Purchase:
+    """Independently verify *purchase* with Paystack and apply the settled
+    status. Idempotent — a purchase that's already resolved (anything but
+    "pending") is returned unchanged, so it's safe to call this more than
+    once for the same purchase.
 
-    Raises ValueError on invalid signature or unknown reference.
+    Per plan 0006's follow-up: called from two trigger points that share
+    this exact settlement logic —
+    - the Paystack webhook (`confirm_purchase`, below), after verifying the
+      webhook's HMAC signature; only reachable when the webhook URL is
+      publicly resolvable (i.e. never in local dev against localhost).
+    - the frontend's verify-on-return call (`purchase_detail_view`'s POST
+      handler) the moment the user's browser lands back on
+      /billing/return?purchase_id=... — this is a normal outbound call from
+      our server to Paystack's API, so it works identically in local dev
+      and in production. This is the primary confirmation path; the webhook
+      remains as an idempotent backup for when the browser never returns.
+
     Raises PaystackError if Paystack's verify call itself fails (network,
-    timeout, 5xx) — this is deliberately NOT caught here and NOT treated as
-    a confirmed payment failure: the purchase stays "pending" and the
-    caller (the webhook view) should return a non-2xx so Paystack retries
-    delivery rather than us guessing at an outcome we don't actually know.
-    Returns the Purchase.
+    timeout, 5xx) — deliberately NOT caught here and NOT treated as a
+    confirmed payment failure: the purchase stays "pending" so a retry
+    (another webhook delivery, or the frontend polling again) can still
+    resolve it correctly once Paystack is reachable again.
     """
-    # 1. Verify HMAC signature before touching the DB
-    if not PaystackClient.verify_signature(raw_body, signature):
-        raise ValueError("Invalid webhook signature")
-
-    # 2. Look up the purchase
-    try:
-        purchase = Purchase.objects.select_related("credit_pack", "user__wallet").get(
-            reference=reference
-        )
-    except Purchase.DoesNotExist:
-        raise ValueError(f"Unknown purchase reference: {reference}")
-
-    # Already settled — idempotent
     if purchase.status != "pending":
         return purchase
 
-    # 3. Independently verify with Paystack (never trust webhook body alone).
-    # Let PaystackError propagate on failure — see docstring.
-    result = PaystackClient().verify_transaction(reference=reference)
+    result = PaystackClient().verify_transaction(reference=purchase.reference)
 
     paystack_data = result.get("data", {})
     paystack_status = paystack_data.get("status", "")
@@ -153,20 +148,46 @@ def confirm_purchase(
         purchase.confirmed_at = timezone.now()
         purchase.save(update_fields=["status", "confirmed_at"])
 
-        # 4. Credit wallet — idempotency key guarantees exactly-once
+        # Credit wallet — idempotency key guarantees exactly-once even if
+        # both the webhook and the verify-on-return call race each other.
         purchase_credit(
             wallet=purchase.user.wallet,
             amount=purchase.credit_pack.amount_credits,
-            idempotency_key=f"paystack:{reference}",
+            idempotency_key=f"paystack:{purchase.reference}",
             reference={
                 "purchase_id": str(purchase.id),
                 "paystack_reference": payment.paystack_reference,
             },
         )
-        logger.info("Purchase %s confirmed, wallet credited.", reference)
+        logger.info("Purchase %s confirmed, wallet credited.", purchase.reference)
     else:
         purchase.status = "failed"
         purchase.save(update_fields=["status"])
-        logger.info("Purchase %s marked failed (Paystack status: %s)", reference, paystack_status)
+        logger.info(
+            "Purchase %s marked failed (Paystack status: %s)",
+            purchase.reference,
+            paystack_status,
+        )
 
     return purchase
+
+
+def confirm_purchase(
+    *, reference: str, raw_body: bytes, signature: str, webhook_body: dict
+) -> Purchase:
+    """Process a Paystack webhook: verify signature, then delegate to the
+    shared settlement logic in `settle_purchase`.
+
+    Raises ValueError on invalid signature or unknown reference.
+    """
+    if not PaystackClient.verify_signature(raw_body, signature):
+        raise ValueError("Invalid webhook signature")
+
+    try:
+        purchase = Purchase.objects.select_related("credit_pack", "user__wallet").get(
+            reference=reference
+        )
+    except Purchase.DoesNotExist:
+        raise ValueError(f"Unknown purchase reference: {reference}")
+
+    return settle_purchase(purchase=purchase, webhook_body=webhook_body)

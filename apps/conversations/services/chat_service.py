@@ -38,6 +38,8 @@ def send_message(
     user,
     prompt: str,
     capability: str | None = None,
+    capabilities: list[str] | None = None,
+    message_content: str | None = None,
 ):
     """Validate, reserve credits, and return a generator of SSE
     ``(event_type, data_dict)`` tuples for the caller to stream.
@@ -46,60 +48,121 @@ def send_message(
     - The provider/capability is unknown or inactive
     - The wallet can't cover the estimated cost
     """
-    if capability is None:
+    requested_capabilities = list(
+        dict.fromkeys(capabilities or ([capability] if capability else []))
+    )
+    if len(requested_capabilities) > 3:
+        raise ValueError("You can reference at most 3 models.")
+
+    if not requested_capabilities:
         default_route = get_default_route()
         if default_route is None:
             raise ValueError("No active capability routes configured.")
-        capability = default_route.slug
-
-    provider = get_provider(capability)
-    if provider is None:
-        raise ValueError(f"Unknown capability: {capability}")
+        requested_capabilities = [default_route.slug]
 
     wallet = CreditWallet.objects.get(user=user)
-
-    # 1. Estimate
     history = _build_history(conversation)
-    estimated = provider.estimate(prompt=prompt, history=history)
+    prepared = []
 
-    # 2. Reserve (raises ValueError → caught by the view, before any stream starts)
-    invocation = ModelInvocation.objects.create(
-        conversation=conversation,
-        capability=capability,
-        status="pending",
-        credits_estimated=estimated,
-    )
-    try:
-        reservation = reserve(
-            wallet=wallet,
-            amount=estimated,
-            idempotency_key=f"reserve:{invocation.id}",
-            reference={"invocation_id": str(invocation.id)},
+    for requested_capability in requested_capabilities:
+        provider = get_provider(requested_capability)
+        if provider is None:
+            raise ValueError(f"Unknown capability: {requested_capability}")
+        prepared.append(
+            {
+                "capability": requested_capability,
+                "provider": provider,
+                "estimated": provider.estimate(prompt=prompt, history=history),
+            }
         )
+
+    reserved = []
+    try:
+        for item in prepared:
+            invocation = ModelInvocation.objects.create(
+                conversation=conversation,
+                capability=item["capability"],
+                status="pending",
+                credits_estimated=item["estimated"],
+            )
+            try:
+                reservation = reserve(
+                    wallet=wallet,
+                    amount=item["estimated"],
+                    idempotency_key=f"reserve:{invocation.id}",
+                    reference={"invocation_id": str(invocation.id)},
+                )
+            except ValueError:
+                invocation.delete()
+                raise
+
+            invocation.reservation_entry = reservation
+            invocation.status = "streaming"
+            invocation.save(update_fields=["reservation_entry", "status"])
+            reserved.append(
+                {
+                    **item,
+                    "invocation": invocation,
+                    "reservation": reservation,
+                }
+            )
     except ValueError:
-        invocation.delete()
+        for item in reserved:
+            release(
+                reservation_entry=item["reservation"],
+                idempotency_key=f"release:{item['invocation'].id}",
+            )
+            item["invocation"].status = "cancelled"
+            item["invocation"].completed_at = timezone.now()
+            item["invocation"].save(update_fields=["status", "completed_at"])
         raise
 
-    invocation.reservation_entry = reservation
-    invocation.save(update_fields=["reservation_entry"])
-
-    # 3. Create user message
     Message.objects.create(
         conversation=conversation,
         role="user",
-        content=prompt,
+        content=message_content or prompt,
     )
 
-    invocation.status = "streaming"
-    invocation.save(update_fields=["status"])
-
-    return _stream_and_settle(
-        provider=provider,
+    return _stream_all(
+        prepared=reserved,
         prompt=prompt,
         history=history,
-        invocation=invocation,
-        reservation=reservation,
     )
+
+
+def _stream_all(*, prepared, prompt, history):
+    """Stream up to three model responses for one persisted user message."""
+    yield (
+        "batch_start",
+        {
+            "invocations": [
+                {
+                    "invocation_id": str(item["invocation"].id),
+                    "capability": item["capability"],
+                }
+                for item in prepared
+            ]
+        },
+    )
+
+    for item in prepared:
+        capability = item["capability"]
+        for event_type, data in _stream_and_settle(
+            provider=item["provider"],
+            prompt=prompt,
+            history=history,
+            invocation=item["invocation"],
+            reservation=item["reservation"],
+        ):
+            yield (
+                event_type,
+                {
+                    **data,
+                    "capability": capability,
+                },
+            )
+
+    yield ("complete", {"count": len(prepared)})
 
 
 def _stream_and_settle(*, provider, prompt, history, invocation, reservation):
