@@ -313,11 +313,13 @@ def list_purchases(
                 "id": str(p.id),
                 "reference": p.reference,
                 "user_email": p.user.email,
-                "credit_pack_label": p.credit_pack.label,
+                "credit_pack_label": (
+                    p.credit_pack.label if p.credit_pack else "Flexible top-up"
+                ),
                 "status": p.status,
                 "currency": p.currency,
                 "amount_minor_units": p.amount_minor_units,
-                "amount_credits": str(p.credit_pack.amount_credits),
+                "amount_credits": str(p.amount_credits),
                 "refunded_at": p.refunded_at.isoformat() if p.refunded_at else None,
                 "created_at": p.created_at.isoformat(),
             }

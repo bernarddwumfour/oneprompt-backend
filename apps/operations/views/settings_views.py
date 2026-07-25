@@ -8,6 +8,7 @@ from django.views.decorators.http import require_http_methods
 from apps.platform.schemas import serialize_platform_settings
 from apps.platform.selectors import get_platform_settings
 from apps.platform.services import set_platform_mode
+from common.audit import log_admin_action
 from common.decorators import jwt_required, role_required
 from common.responses import APIResponse
 
@@ -22,12 +23,16 @@ def platform_settings_view(request):
             body = json.loads(request.body)
         except json.JSONDecodeError:
             return APIResponse.bad_request("Invalid JSON.")
+        mode = body.get("mode", "")
         try:
-            obj = set_platform_mode(
-                mode=body.get("mode", ""), actor=request.user
-            )
+            obj = set_platform_mode(mode=mode, actor=request.user)
         except ValueError as e:
             return APIResponse.bad_request(str(e))
+        log_admin_action(
+            actor=request.user, app_name="platform", action="platform_mode_change",
+            description=f"Platform mode changed to {mode}",
+            request=request,
+        )
         return APIResponse.success(
             data=serialize_platform_settings(obj),
             message="Platform mode updated.",

@@ -16,6 +16,7 @@ from apps.billing.schemas.purchase_schemas import (
 )
 from apps.credits.services.ledger_service import refund
 from apps.operations.selectors.operations_selectors import list_purchases
+from common.audit import log_admin_action
 from common.decorators import jwt_required, role_required
 from common.responses import APIResponse
 from common.utils import parse_pagination
@@ -78,7 +79,7 @@ def purchase_refund_view(request, purchase_id):
     # Issue refund via ledger
     entry = refund(
         wallet=purchase.user.wallet,
-        amount=purchase.credit_pack.amount_credits,
+        amount=purchase.amount_credits,
         idempotency_key=f"refund:{purchase.id}:{idempotency_key}",
         reference={
             "purchase_id": str(purchase.id),
@@ -98,6 +99,11 @@ def purchase_refund_view(request, purchase_id):
         reason,
     )
 
+    log_admin_action(
+        actor=request.user, app_name="billing", action="purchase_refund",
+        description=f"Refunded purchase {purchase.reference}",
+        request=request,
+    )
     return APIResponse.success(
         data={
             "refund_entry_id": str(entry.id),

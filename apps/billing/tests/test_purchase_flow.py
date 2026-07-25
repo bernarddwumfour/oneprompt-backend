@@ -33,7 +33,31 @@ class CreatePurchaseTests(TestCase):
         self.assertEqual(result["authorization_url"], "https://paystack.test/pay/abc")
         purchase = Purchase.objects.get(reference=result["reference"])
         self.assertEqual(purchase.status, "pending")
+        self.assertEqual(purchase.amount_credits, self.pack.amount_credits)
         self.assertTrue(hasattr(purchase, "payment"))
+
+    def test_flexible_ghs_purchase_accepts_whole_amount_from_ten_cedis(self):
+        with patch.object(
+            PaystackClient,
+            "initialize_transaction",
+            return_value={
+                "data": {
+                    "reference": "paystack-flex",
+                    "authorization_url": "https://paystack.test/pay/flex",
+                }
+            },
+        ):
+            result = create_purchase(user=self.user, flexible_amount=15)
+
+        purchase = Purchase.objects.get(reference=result["reference"])
+        self.assertIsNone(purchase.credit_pack)
+        self.assertEqual(purchase.amount_minor_units, 1500)
+        self.assertEqual(purchase.amount_credits, Decimal("75.00"))
+
+    def test_flexible_purchase_rejects_fractional_or_below_minimum_amounts(self):
+        for amount in (9, 10.5, -10):
+            with self.subTest(amount=amount), self.assertRaises(ValueError):
+                create_purchase(user=self.user, flexible_amount=amount)
 
     def test_rejects_unsupported_wallet_currency(self):
         wallet = CreditWallet.objects.create(

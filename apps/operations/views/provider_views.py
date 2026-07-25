@@ -10,6 +10,7 @@ from django.views.decorators.http import require_http_methods
 from apps.platform.selectors import get_platform_mode
 from apps.providers.models import CapabilityRoute
 from apps.providers.registry import provider_has_api_key
+from common.audit import log_admin_action
 from common.decorators import jwt_required, role_required
 from common.responses import APIResponse
 
@@ -131,4 +132,9 @@ def capability_route_update_view(request, route_id):
     if cleaned:
         route.save(update_fields=list(cleaned.keys()))
 
+    log_admin_action(
+        actor=request.user, app_name="providers", action="capability_route_update",
+        description=f"Updated route {route.slug}: {list(cleaned.keys())}",
+        request=request,
+    )
     return APIResponse.success(data={"route": _serialize_route(route)})

@@ -16,6 +16,7 @@ from apps.operations.selectors.operations_selectors import (
     search_customers,
 )
 from apps.operations.services.operations_service import correct_wallet
+from common.audit import log_admin_action
 from common.decorators import jwt_required, role_required
 from common.responses import APIResponse
 from common.utils import parse_pagination
@@ -87,6 +88,11 @@ def customer_correct_view(request, user_id):
     except ValueError as e:
         return APIResponse.bad_request(str(e))
 
+    log_admin_action(
+        actor=request.user, app_name="credits", action="wallet_correction",
+        description=f"Corrected {user.email}'s wallet by {cleaned['amount']} ({cleaned['direction']})",
+        request=request,
+    )
     return APIResponse.success(
         data=result, message="Wallet correction applied."
     )

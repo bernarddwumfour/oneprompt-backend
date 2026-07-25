@@ -53,7 +53,11 @@ class Purchase(models.Model):
         related_name="purchases",
     )
     credit_pack = models.ForeignKey(
-        CreditPack, on_delete=models.PROTECT, related_name="purchases"
+        CreditPack,
+        on_delete=models.PROTECT,
+        related_name="purchases",
+        null=True,
+        blank=True,
     )
     reference = models.CharField(
         max_length=64,
@@ -70,6 +74,11 @@ class Purchase(models.Model):
     currency = models.CharField(max_length=3)
     amount_minor_units = models.IntegerField(
         help_text="Snapshot of pack price at purchase time"
+    )
+    amount_credits = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text="Snapshot of wallet credits granted after successful payment.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     refunded_at = models.DateTimeField(null=True, blank=True)

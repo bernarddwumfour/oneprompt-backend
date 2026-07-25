@@ -11,11 +11,27 @@ from apps.operations.views.conversation_views import (
     conversation_list_view,
 )
 from apps.operations.views.settings_views import platform_settings_view
+from apps.operations.views.staff_views import (
+    staff_demote_view,
+    staff_list_view,
+    staff_promote_view,
+)
+from apps.operations.views.support_views import (
+    admin_ticket_detail_view,
+    admin_ticket_list_view,
+    admin_ticket_reply_view,
+    admin_ticket_status_view,
+)
 from apps.operations.views.customer_views import (
     customer_correct_view,
     customer_detail_view,
     customer_list_view,
 )
+from apps.operations.views.analytics_views import (
+    analytics_providers_view,
+    analytics_trends_view,
+)
+from apps.operations.views.audit_views import audit_log_list_view
 from apps.operations.views.invocation_views import invocation_list_view
 from apps.operations.views.ledger_views import ledger_list_view
 from apps.operations.views.overview_views import overview_view
@@ -47,5 +63,14 @@ urlpatterns = [
     path("conversations", conversation_list_view, name="operations-conversations"),
     path("conversations/<uuid:conversation_id>", conversation_detail_view, name="operations-conversation-detail"),
     path("settings", platform_settings_view, name="operations-settings"),
-
+    path("staff", staff_list_view, name="operations-staff"),
+    path("staff/<uuid:user_id>/promote", staff_promote_view, name="operations-staff-promote"),
+    path("staff/<uuid:user_id>/demote", staff_demote_view, name="operations-staff-demote"),
+    path("support/tickets", admin_ticket_list_view, name="operations-support-tickets"),
+    path("support/tickets/<uuid:ticket_id>", admin_ticket_detail_view, name="operations-support-ticket-detail"),
+    path("support/tickets/<uuid:ticket_id>/reply", admin_ticket_reply_view, name="operations-support-ticket-reply"),
+    path("support/tickets/<uuid:ticket_id>/status", admin_ticket_status_view, name="operations-support-ticket-status"),
+    path("analytics/trends", analytics_trends_view, name="operations-analytics-trends"),
+    path("analytics/providers", analytics_providers_view, name="operations-analytics-providers"),
+    path("audit-logs", audit_log_list_view, name="operations-audit-logs"),
 ]

@@ -25,6 +25,7 @@ urlpatterns = [
                 path("capabilities", include("apps.providers.urls")),
                 path("billing/", include("apps.billing.urls")),
                 path("operations/", include("apps.operations.urls")),
+                path("support/", include("apps.support.urls")),
                 path(
                     "invocations/<uuid:invocation_id>/cancel",
                     cancel_invocation_view,

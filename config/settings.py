@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     "apps.billing",
     "apps.operations",
     "apps.platform",
+    "apps.support",
 ]
 
 AUTH_USER_MODEL = "accounts.User"

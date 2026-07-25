@@ -20,6 +20,7 @@ from apps.accounts.schemas.auth_schemas import (
     validate_signup,
     validate_verify_email,
 )
+from apps.accounts.models import User
 from apps.accounts.services.auth_service import (
     authenticate_user,
     authenticate_google_user,
@@ -31,6 +32,7 @@ from apps.accounts.services.auth_service import (
     signup,
     verify_email,
 )
+from common.audit import log_admin_action
 from common.decorators import jwt_required, rate_limit
 from common.responses import APIResponse
 
@@ -108,6 +110,14 @@ def login_view(request):
     except ValueError as e:
         return APIResponse.unauthorized(str(e))
 
+    if result["user"]["is_staff"]:
+        # Only fetch the model instance when we actually need to log —
+        # avoids an extra query on every non-staff login.
+        user = User.objects.get(id=result["user"]["id"])
+        log_admin_action(
+            actor=user, app_name="accounts", action="admin_login",
+            description=f"{user.email} logged in", request=request,
+        )
     return APIResponse.success(data=result, message="Login successful.")
 
 

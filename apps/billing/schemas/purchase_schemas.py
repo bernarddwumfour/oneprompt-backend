@@ -22,9 +22,14 @@ def serialize_purchase(purchase: Purchase) -> dict:
         "status": purchase.status,
         "currency": purchase.currency,
         "amount_minor_units": purchase.amount_minor_units,
+        "amount_credits": str(purchase.amount_credits),
         "credit_pack": {
-            "label": purchase.credit_pack.label,
-            "amount_credits": str(purchase.credit_pack.amount_credits),
+            "label": (
+                purchase.credit_pack.label
+                if purchase.credit_pack
+                else "Flexible top-up"
+            ),
+            "amount_credits": str(purchase.amount_credits),
         },
         "refunded_at": purchase.refunded_at.isoformat() if purchase.refunded_at else None,
         "created_at": purchase.created_at.isoformat(),

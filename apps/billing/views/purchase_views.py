@@ -42,12 +42,19 @@ def create_purchase_view(request):
     except json.JSONDecodeError:
         return APIResponse.bad_request("Invalid JSON.")
 
-    credit_pack_id = body.get("credit_pack_id", "")
-    if not credit_pack_id:
-        return APIResponse.bad_request("credit_pack_id is required.")
+    credit_pack_id = body.get("credit_pack_id")
+    flexible_amount = body.get("flexible_amount")
+    if not credit_pack_id and flexible_amount is None:
+        return APIResponse.bad_request(
+            "credit_pack_id or flexible_amount is required."
+        )
 
     try:
-        result = create_purchase(user=request.user, credit_pack_id=credit_pack_id)
+        result = create_purchase(
+            user=request.user,
+            credit_pack_id=credit_pack_id,
+            flexible_amount=flexible_amount,
+        )
     except ValueError as e:
         return APIResponse.bad_request(str(e))
     except Exception as e:

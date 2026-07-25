@@ -6,6 +6,7 @@ Paystack's API.
 """
 
 import logging
+from decimal import Decimal
 
 from django.conf import settings
 from django.db import transaction
@@ -24,7 +25,12 @@ from common.utils import generate_token
 logger = logging.getLogger(__name__)
 
 
-def create_purchase(*, user, credit_pack_id: str) -> dict:
+def create_purchase(
+    *,
+    user,
+    credit_pack_id: str | None = None,
+    flexible_amount: int | None = None,
+) -> dict:
     """Create a pending Purchase + Payment, call Paystack, return auth URL.
 
     Raises ValueError if:
@@ -36,11 +42,6 @@ def create_purchase(*, user, credit_pack_id: str) -> dict:
     rather than one shared with the Paystack call.
     """
     with transaction.atomic():
-        try:
-            pack = CreditPack.objects.get(id=credit_pack_id, is_active=True)
-        except CreditPack.DoesNotExist:
-            raise ValueError("Credit pack not found or unavailable.")
-
         wallet = user.wallet
         if wallet.currency not in PAYSTACK_CURRENCIES:
             supported = ", ".join(sorted(PAYSTACK_CURRENCIES))
@@ -49,11 +50,35 @@ def create_purchase(*, user, credit_pack_id: str) -> dict:
                 f"Your wallet currency ({wallet.currency}) is not supported yet."
             )
 
-        if pack.currency != wallet.currency:
-            raise ValueError(
-                f"This pack is denominated in {pack.currency} "
-                f"but your wallet is {wallet.currency}."
-            )
+        if flexible_amount is not None:
+            if wallet.currency != "GHS":
+                raise ValueError("Flexible top-ups are currently available for GHS wallets.")
+            if (
+                isinstance(flexible_amount, bool)
+                or not isinstance(flexible_amount, int)
+                or flexible_amount < 10
+            ):
+                raise ValueError(
+                    "Flexible top-up must be a positive whole number of at least GH₵10."
+                )
+            pack = None
+            currency = "GHS"
+            amount_minor_units = flexible_amount * 100
+            amount_credits = Decimal(flexible_amount) * Decimal("5.00")
+        else:
+            try:
+                pack = CreditPack.objects.get(id=credit_pack_id, is_active=True)
+            except (CreditPack.DoesNotExist, ValueError):
+                raise ValueError("Credit pack not found or unavailable.")
+
+            if pack.currency != wallet.currency:
+                raise ValueError(
+                    f"This pack is denominated in {pack.currency} "
+                    f"but your wallet is {wallet.currency}."
+                )
+            currency = pack.currency
+            amount_minor_units = pack.price_minor_units
+            amount_credits = pack.amount_credits
 
         reference = generate_token(32)
 
@@ -62,8 +87,9 @@ def create_purchase(*, user, credit_pack_id: str) -> dict:
             credit_pack=pack,
             reference=reference,
             status="pending",
-            currency=pack.currency,
-            amount_minor_units=pack.price_minor_units,
+            currency=currency,
+            amount_minor_units=amount_minor_units,
+            amount_credits=amount_credits,
         )
 
     # Deliberately outside the transaction above: if Paystack initialize
@@ -75,8 +101,8 @@ def create_purchase(*, user, credit_pack_id: str) -> dict:
     try:
         result = client.initialize_transaction(
             email=user.email,
-            amount_minor_units=pack.price_minor_units,
-            currency=pack.currency,
+            amount_minor_units=purchase.amount_minor_units,
+            currency=purchase.currency,
             reference=reference,
             callback_url=callback_url,
         )
@@ -152,7 +178,7 @@ def settle_purchase(*, purchase: Purchase, webhook_body: dict | None = None) -> 
         # both the webhook and the verify-on-return call race each other.
         purchase_credit(
             wallet=purchase.user.wallet,
-            amount=purchase.credit_pack.amount_credits,
+            amount=purchase.amount_credits,
             idempotency_key=f"paystack:{purchase.reference}",
             reference={
                 "purchase_id": str(purchase.id),
