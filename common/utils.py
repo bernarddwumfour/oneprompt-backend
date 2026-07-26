@@ -4,7 +4,9 @@ Shared utilities — small helpers used across the project.
 
 import secrets
 import unicodedata
+from datetime import datetime
 from typing import Optional
+from urllib.parse import parse_qs
 
 
 def generate_token(length: int = 32) -> str:
@@ -32,6 +34,32 @@ def parse_pagination(request, default_limit: int = 20, max_limit: int = 100) -> 
     return page, min(limit, max_limit)
 
 
+def parse_ordering(request, allowed_fields: dict[str, str], default: str) -> str:
+    """Return a validated Django ``order_by`` expression from URL params."""
+    sort_by = request.GET.get("sort_by", "").strip()
+    sort_order = request.GET.get("sort_order", "desc").strip().lower()
+    if sort_order not in {"asc", "desc"}:
+        raise ValueError("sort_order must be either asc or desc.")
+    if not sort_by:
+        return default
+    field = allowed_fields.get(sort_by)
+    if field is None:
+        raise ValueError(
+            f"sort_by must be one of: {', '.join(sorted(allowed_fields))}."
+        )
+    return field if sort_order == "asc" else f"-{field}"
+
+
+def parse_optional_bool(request, name: str) -> bool | None:
+    """Parse an optional true/false query parameter."""
+    raw = request.GET.get(name, "").strip().lower()
+    if not raw:
+        return None
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{name} must be either true or false.")
+    return raw == "true"
+
+
 def parse_int_query_param(
     request, name: str, default: int, *, min_value: int = 1, max_value: int | None = None
 ) -> int:
@@ -53,6 +81,36 @@ def parse_int_query_param(
         raise ValueError(f"{name} must be at most {max_value}.")
 
     return value
+
+
+def parse_date_range_param(request, name: str) -> tuple[datetime | None, datetime | None]:
+    """Parse a `date_range` filter param encoded as ``from=<iso>&to=<iso>``.
+
+    Matches the wire format produced by the frontend's `CustomFilterFromUrl`
+    `date_range` field type (`valueToUrlParam` in
+    `CustomFilterFromUrl.tsx`), which packs both bounds into one query param
+    value. Either bound may be absent. Malformed values are treated as
+    absent rather than raising — a bad date filter should show unfiltered
+    results, not a 500.
+    """
+    raw = request.GET.get(name, "")
+    if not raw:
+        return None, None
+    parsed = parse_qs(raw)
+    from_str = parsed.get("from", [None])[0]
+    to_str = parsed.get("to", [None])[0]
+    from_dt = _parse_iso_datetime(from_str) if from_str else None
+    to_dt = _parse_iso_datetime(to_str) if to_str else None
+    return from_dt, to_dt
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    from django.utils.dateparse import parse_datetime
+
+    try:
+        return parse_datetime(value)
+    except (ValueError, TypeError):
+        return None
 
 
 def slugify(value: str, max_length: int = 120) -> str:

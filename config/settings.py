@@ -49,6 +49,17 @@ OPENAI_BASE_URL = config(
 )
 ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
 ANTHROPIC_BASE_URL = config("ANTHROPIC_BASE_URL", default="")
+CLOUDFLARE_API_KEY = config("CLOUDFLARE_API_KEY", default="")
+CLOUDFLARE_ACCOUNT_ID = config("CLOUDFLARE_ACCOUNT_ID", default="")
+CLOUDFLARE_BASE_URL = config(
+    "CLOUDFLARE_BASE_URL",
+    default=(
+        f"https://api.cloudflare.com/client/v4/accounts/"
+        f"{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+        if CLOUDFLARE_ACCOUNT_ID
+        else ""
+    ),
+)
 
 # --- Paystack (Plan 0002) ------------------------------------------------
 PAYSTACK_SECRET_KEY = config("PAYSTACK_SECRET_KEY", default="")

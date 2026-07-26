@@ -10,6 +10,7 @@ from apps.conversations.services.chat_service import send_message
 from apps.conversations.tests.factories import ConversationFactory
 from apps.credits.models import CreditWallet
 from apps.credits.services.ledger_service import promotional_credit
+from apps.providers.models import CapabilityRoute
 
 
 class ChatServiceTests(TestCase):
@@ -18,6 +19,7 @@ class ChatServiceTests(TestCase):
         self.user = UserFactory()
         self.wallet = CreditWallet.objects.create(user=self.user, currency="USD")
         self.conversation = ConversationFactory(user=self.user)
+        CapabilityRoute.objects.filter(slug="fast").update(is_active=True)
 
         sleep_patcher = patch("apps.providers.stub_provider.time.sleep")
         sleep_patcher.start()
@@ -31,7 +33,12 @@ class ChatServiceTests(TestCase):
     def test_happy_path_charges_wallet_and_resolves_reservation(self):
         self._fund()
 
-        gen = send_message(conversation=self.conversation, user=self.user, prompt="Hello there")
+        gen = send_message(
+            conversation=self.conversation,
+            user=self.user,
+            prompt="Hello there",
+            capability="fast",
+        )
         events = list(gen)
         event_types = [e[0] for e in events]
 
@@ -53,7 +60,12 @@ class ChatServiceTests(TestCase):
     def test_insufficient_balance_raises_before_creating_any_rows(self):
         # Wallet has zero balance — no funding.
         with self.assertRaises(ValueError):
-            send_message(conversation=self.conversation, user=self.user, prompt="Hello")
+            send_message(
+                conversation=self.conversation,
+                user=self.user,
+                prompt="Hello",
+                capability="fast",
+            )
 
         self.assertEqual(ModelInvocation.objects.filter(conversation=self.conversation).count(), 0)
         self.assertEqual(Message.objects.filter(conversation=self.conversation).count(), 0)
@@ -75,6 +87,7 @@ class ChatServiceTests(TestCase):
             conversation=self.conversation,
             user=self.user,
             prompt="Hello there, how are you today?",
+            capability="fast",
         )
         start_event = next(gen)
         self.assertEqual(start_event[0], "batch_start")
@@ -94,3 +107,23 @@ class ChatServiceTests(TestCase):
         self.assertEqual(
             Message.objects.filter(conversation=self.conversation, role="assistant").count(), 0
         )
+
+    def test_free_route_works_with_zero_balance_and_creates_no_ledger_entries(self):
+        gen = send_message(
+            conversation=self.conversation,
+            user=self.user,
+            prompt="Hello for free",
+            capability="oneprompt-free",
+        )
+        events = list(gen)
+
+        self.assertIn("done", [event[0] for event in events])
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal("0.00"))
+        self.assertEqual(self.wallet.reserved, Decimal("0.00"))
+
+        invocation = ModelInvocation.objects.get(conversation=self.conversation)
+        self.assertEqual(invocation.credits_estimated, Decimal("0.00"))
+        self.assertEqual(invocation.credits_charged, Decimal("0.00"))
+        self.assertIsNone(invocation.reservation_entry)
+        self.assertIsNone(invocation.capture_entry)

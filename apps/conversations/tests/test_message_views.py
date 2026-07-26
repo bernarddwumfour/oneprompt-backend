@@ -62,7 +62,9 @@ class SendMessageViewTests(TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_send_message_can_stream_up_to_three_models_for_one_user_message(self):
-        CapabilityRoute.objects.filter(slug="deepseek-flash").update(is_active=True)
+        CapabilityRoute.objects.filter(
+            slug__in=["fast", "deepseek-flash"]
+        ).update(is_active=True)
         response = self.client.post(
             f"/api/v1/conversations/{self.conversation.id}/messages",
             data=json.dumps(

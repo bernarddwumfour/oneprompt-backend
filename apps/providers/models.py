@@ -14,6 +14,7 @@ PROVIDER_KEY_CHOICES = [
     ("gemini", "Gemini (Google)"),
     ("claude", "Claude (Anthropic)"),
     ("chatgpt", "ChatGPT (OpenAI)"),
+    ("cloudflare", "Cloudflare Workers AI"),
 ]
 
 
@@ -81,6 +82,10 @@ class CapabilityRoute(models.Model):
     is_default = models.BooleanField(
         default=False,
         help_text="Exactly one active route should be the default selection.",
+    )
+    is_free = models.BooleanField(
+        default=False,
+        help_text="If True, users can invoke this route without wallet credits.",
     )
     sort_order = models.IntegerField(default=0, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -2,6 +2,8 @@
 
 import json
 import logging
+import re
+import uuid
 
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -20,6 +22,24 @@ from common.decorators import jwt_required
 from common.responses import APIResponse
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_return_context(body: dict) -> dict[str, str]:
+    """Allow only the two bounded chat URL values used after checkout."""
+    context: dict[str, str] = {}
+
+    conversation = str(body.get("conversation") or "").strip()
+    if conversation:
+        try:
+            context["conversation"] = str(uuid.UUID(conversation))
+        except ValueError:
+            pass
+
+    model = str(body.get("model") or "").strip()
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,49}", model):
+        context["model"] = model
+
+    return context
 
 
 @csrf_exempt
@@ -54,6 +74,7 @@ def create_purchase_view(request):
             user=request.user,
             credit_pack_id=credit_pack_id,
             flexible_amount=flexible_amount,
+            return_context=_clean_return_context(body),
         )
     except ValueError as e:
         return APIResponse.bad_request(str(e))

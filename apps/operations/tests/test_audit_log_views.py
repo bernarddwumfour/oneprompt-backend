@@ -56,6 +56,10 @@ class AuditLogListViewTests(TestCase):
         data = self._list(self.admin_token, action="staff_promoted").json()["data"]
         self.assertEqual(data["total"], 1)
 
+    def test_status_code_present_for_the_sort_option_to_render(self):
+        data = self._list(self.admin_token).json()["data"]
+        self.assertIn("status_code", data["logs"][0])
+
     def test_pagination(self):
         data = self._list(self.admin_token, page=1, limit=2).json()["data"]
         self.assertEqual(len(data["logs"]), 2)

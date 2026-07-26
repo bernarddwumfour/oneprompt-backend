@@ -73,7 +73,9 @@ class OpenAIChatCompatibleProvider(AIProvider):
             Decimal(input_tokens) / 1000 * self.credit_rate_input
             + Decimal(estimated_output) / 1000 * self.credit_rate_output
         )
-        return max(_to_credits(cost), Decimal("0.01"))
+        return Decimal("0.00") if cost == 0 else max(
+            _to_credits(cost), Decimal("0.01")
+        )
 
     def stream_response(
         self, *, prompt: str, history: list[dict], invocation_id: str
@@ -195,7 +197,11 @@ class OpenAIChatCompatibleProvider(AIProvider):
         return {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "credits": max(_to_credits(credits), Decimal("0.01")),
+            "credits": (
+                Decimal("0.00")
+                if credits == 0
+                else max(_to_credits(credits), Decimal("0.01"))
+            ),
         }
 
     def moderate(self, *, text: str) -> bool:

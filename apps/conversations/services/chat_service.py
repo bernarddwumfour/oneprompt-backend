@@ -27,6 +27,7 @@ from django.utils import timezone
 from apps.conversations.models import Conversation, Message, ModelInvocation
 from apps.credits.models import CreditWallet
 from apps.credits.services.ledger_service import capture, release, reserve
+from apps.providers.models import CapabilityRoute
 from apps.providers.registry import get_default_route, get_provider
 
 logger = logging.getLogger(__name__)
@@ -68,11 +69,19 @@ def send_message(
         provider = get_provider(requested_capability)
         if provider is None:
             raise ValueError(f"Unknown capability: {requested_capability}")
+        route = CapabilityRoute.objects.get(
+            slug=requested_capability, is_active=True
+        )
         prepared.append(
             {
                 "capability": requested_capability,
                 "provider": provider,
-                "estimated": provider.estimate(prompt=prompt, history=history),
+                "is_free": route.is_free,
+                "estimated": (
+                    Decimal("0.00")
+                    if route.is_free
+                    else provider.estimate(prompt=prompt, history=history)
+                ),
             }
         )
 
@@ -85,6 +94,17 @@ def send_message(
                 status="pending",
                 credits_estimated=item["estimated"],
             )
+            if item["is_free"]:
+                invocation.status = "streaming"
+                invocation.save(update_fields=["status"])
+                reserved.append(
+                    {
+                        **item,
+                        "invocation": invocation,
+                        "reservation": None,
+                    }
+                )
+                continue
             try:
                 reservation = reserve(
                     wallet=wallet,
@@ -108,10 +128,11 @@ def send_message(
             )
     except ValueError:
         for item in reserved:
-            release(
-                reservation_entry=item["reservation"],
-                idempotency_key=f"release:{item['invocation'].id}",
-            )
+            if item["reservation"] is not None:
+                release(
+                    reservation_entry=item["reservation"],
+                    idempotency_key=f"release:{item['invocation'].id}",
+                )
             item["invocation"].status = "cancelled"
             item["invocation"].completed_at = timezone.now()
             item["invocation"].save(update_fields=["status", "completed_at"])
@@ -153,6 +174,7 @@ def _stream_all(*, prepared, prompt, history):
             history=history,
             invocation=item["invocation"],
             reservation=item["reservation"],
+            is_free=item["is_free"],
         ):
             yield (
                 event_type,
@@ -165,7 +187,9 @@ def _stream_all(*, prepared, prompt, history):
     yield ("complete", {"count": len(prepared)})
 
 
-def _stream_and_settle(*, provider, prompt, history, invocation, reservation):
+def _stream_and_settle(
+    *, provider, prompt, history, invocation, reservation, is_free=False
+):
     """Generator — the actual SSE event stream for one invocation.
 
     Yields a ``start`` event first (carrying the invocation id, so the
@@ -184,10 +208,11 @@ def _stream_and_settle(*, provider, prompt, history, invocation, reservation):
 
         if cache.get(f"cancel:{invocation.id}"):
             # 6. Cancelled — release the full reservation, no assistant message
-            release(
-                reservation_entry=reservation,
-                idempotency_key=f"release:{invocation.id}",
-            )
+            if reservation is not None:
+                release(
+                    reservation_entry=reservation,
+                    idempotency_key=f"release:{invocation.id}",
+                )
             invocation.status = "cancelled"
             invocation.completed_at = timezone.now()
             invocation.save()
@@ -205,6 +230,8 @@ def _stream_and_settle(*, provider, prompt, history, invocation, reservation):
                 "usage": getattr(provider, "last_usage", None),
             }
         )
+        if is_free:
+            usage["credits"] = Decimal("0.00")
 
         assistant_msg = Message.objects.create(
             conversation=invocation.conversation,
@@ -212,11 +239,13 @@ def _stream_and_settle(*, provider, prompt, history, invocation, reservation):
             content=accumulated_text,
         )
 
-        capture_entry = capture(
-            reservation_entry=reservation,
-            actual_amount=usage["credits"],
-            idempotency_key=f"capture:{invocation.id}",
-        )
+        capture_entry = None
+        if reservation is not None:
+            capture_entry = capture(
+                reservation_entry=reservation,
+                actual_amount=usage["credits"],
+                idempotency_key=f"capture:{invocation.id}",
+            )
 
         # Compute provider cost in USD from the route's wholesale rates
         provider_cost = _compute_provider_cost(
@@ -249,10 +278,11 @@ def _stream_and_settle(*, provider, prompt, history, invocation, reservation):
         # 7. Failure — release
         logger.error("Chat streaming failed for invocation %s: %s", invocation.id, exc)
         try:
-            release(
-                reservation_entry=reservation,
-                idempotency_key=f"release:{invocation.id}",
-            )
+            if reservation is not None:
+                release(
+                    reservation_entry=reservation,
+                    idempotency_key=f"release:{invocation.id}",
+                )
         except Exception as release_exc:
             logger.error("Failed to release reservation: %s", release_exc)
 

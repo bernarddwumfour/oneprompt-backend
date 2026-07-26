@@ -7,6 +7,7 @@ Paystack's API.
 
 import logging
 from decimal import Decimal
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.db import transaction
@@ -30,6 +31,7 @@ def create_purchase(
     user,
     credit_pack_id: str | None = None,
     flexible_amount: int | None = None,
+    return_context: dict[str, str] | None = None,
 ) -> dict:
     """Create a pending Purchase + Payment, call Paystack, return auth URL.
 
@@ -96,7 +98,13 @@ def create_purchase(
     # fails, we still want the Purchase row (and the "failed" mark below)
     # to persist as an audit trail, not be rolled back with it.
     client = PaystackClient()
-    callback_url = f"{settings.FRONTEND_URL}/billing/return?purchase_id={purchase.id}"
+    callback_query = urlencode(
+        {
+            "purchase_id": str(purchase.id),
+            **(return_context or {}),
+        }
+    )
+    callback_url = f"{settings.FRONTEND_URL}/billing/return?{callback_query}"
 
     try:
         result = client.initialize_transaction(

@@ -105,14 +105,36 @@ def get_overview(*, currency: str, period: str = "month") -> dict:
     }
 
 
-def search_customers(*, search: str = "", page: int = 1, limit: int = 20) -> dict:
-    """Paginated customer search by email or full_name."""
+def search_customers(
+    *, search: str = "", page: int = 1, limit: int = 20,
+    is_staff: bool | None = None, is_active: bool | None = None,
+    is_email_verified: bool | None = None, country: str = "",
+    date_joined_from=None, date_joined_to=None,
+    ordering: str = "-date_joined",
+) -> dict:
+    """Paginated customer search by email or full_name.
+
+    *is_staff* — filter by staff status; None (default) returns all,
+    True returns only staff, False returns only non-staff customers.
+    """
     qs = User.objects.all()
+    if is_staff is not None:
+        qs = qs.filter(is_staff=is_staff)
+    if is_active is not None:
+        qs = qs.filter(is_active=is_active)
+    if is_email_verified is not None:
+        qs = qs.filter(is_email_verified=is_email_verified)
+    if country:
+        qs = qs.filter(country__iexact=country)
+    if date_joined_from:
+        qs = qs.filter(date_joined__gte=date_joined_from)
+    if date_joined_to:
+        qs = qs.filter(date_joined__lte=date_joined_to)
     if search:
         qs = qs.filter(
             Q(email__icontains=search) | Q(full_name__icontains=search)
         )
-    qs = qs.order_by("-date_joined")
+    qs = qs.order_by(ordering, "id")
 
     total = qs.count()
     offset = (page - 1) * limit
@@ -127,6 +149,7 @@ def search_customers(*, search: str = "", page: int = 1, limit: int = 20) -> dic
                 "country": u.country,
                 "is_email_verified": u.is_email_verified,
                 "is_staff": u.is_staff,
+                "is_active": u.is_active,
                 "date_joined": u.date_joined.isoformat(),
                 "wallet": _wallet_summary(u),
             }
@@ -181,19 +204,33 @@ def get_customer_detail(user: User) -> dict:
     }
 
 
-def list_invocations(*, status: str = "", capability: str = "", page: int = 1, limit: int = 20) -> dict:
+def list_invocations(
+    *, search: str = "", status: str = "", capability: str = "",
+    created_from=None, created_to=None,
+    page: int = 1, limit: int = 20, ordering: str = "-created_at",
+) -> dict:
     """Admin invocation listing with aggregate stats."""
     from django.db.models import Avg, Count, F, Q
     from django.utils import timezone
 
     qs = ModelInvocation.objects.select_related(
         "conversation__user"
-    ).order_by("-created_at")
+    )
 
+    if search:
+        qs = qs.filter(
+            Q(conversation__user__email__icontains=search)
+            | Q(error_message__icontains=search)
+        )
     if status:
         qs = qs.filter(status=status)
     if capability:
         qs = qs.filter(capability=capability)
+    if created_from:
+        qs = qs.filter(created_at__gte=created_from)
+    if created_to:
+        qs = qs.filter(created_at__lte=created_to)
+    qs = qs.order_by(ordering, "id")
 
     total = qs.count()
     offset = (page - 1) * limit
@@ -253,17 +290,29 @@ def list_invocations(*, status: str = "", capability: str = "", page: int = 1, l
 
 
 def list_ledger_entries(
-    *, entry_type: str = "", currency: str = "", page: int = 1, limit: int = 20
+    *, search: str = "", entry_type: str = "", currency: str = "",
+    created_from=None, created_to=None,
+    page: int = 1, limit: int = 20, ordering: str = "-created_at",
 ) -> dict:
     """Global ledger entry listing."""
     qs = CreditLedgerEntry.objects.select_related(
         "wallet__user"
-    ).order_by("-created_at")
+    )
 
+    if search:
+        qs = qs.filter(
+            Q(wallet__user__email__icontains=search)
+            | Q(reason__icontains=search)
+        )
     if entry_type:
         qs = qs.filter(entry_type=entry_type)
     if currency:
         qs = qs.filter(wallet__currency=currency.upper())
+    if created_from:
+        qs = qs.filter(created_at__gte=created_from)
+    if created_to:
+        qs = qs.filter(created_at__lte=created_to)
+    qs = qs.order_by(ordering, "id")
 
     total = qs.count()
     offset = (page - 1) * limit
@@ -291,17 +340,28 @@ def list_ledger_entries(
 
 
 def list_purchases(
-    *, status: str = "", currency: str = "", page: int = 1, limit: int = 20
+    *, search: str = "", status: str = "", currency: str = "",
+    created_from=None, created_to=None,
+    page: int = 1, limit: int = 20, ordering: str = "-created_at",
 ) -> dict:
     """Global purchase listing."""
     qs = Purchase.objects.select_related(
         "user", "credit_pack", "payment"
-    ).order_by("-created_at")
+    )
 
+    if search:
+        qs = qs.filter(
+            Q(reference__icontains=search) | Q(user__email__icontains=search)
+        )
     if status:
         qs = qs.filter(status=status)
     if currency:
         qs = qs.filter(currency=currency.upper())
+    if created_from:
+        qs = qs.filter(created_at__gte=created_from)
+    if created_to:
+        qs = qs.filter(created_at__lte=created_to)
+    qs = qs.order_by(ordering, "id")
 
     total = qs.count()
     offset = (page - 1) * limit
@@ -332,17 +392,26 @@ def list_purchases(
 
 
 def list_conversations(
-    *, user_email: str = "", page: int = 1, limit: int = 20
+    *, search: str = "", page: int = 1, limit: int = 20,
+    updated_from=None, updated_to=None,
+    ordering: str = "-updated_at",
 ) -> dict:
     """Admin conversation listing with message count."""
     from django.db.models import Count, Q
 
     qs = Conversation.objects.select_related("user").annotate(
         message_count=Count("messages")
-    ).order_by("-updated_at")
+    )
 
-    if user_email:
-        qs = qs.filter(user__email__icontains=user_email)
+    if search:
+        qs = qs.filter(
+            Q(user__email__icontains=search) | Q(title__icontains=search)
+        )
+    if updated_from:
+        qs = qs.filter(updated_at__gte=updated_from)
+    if updated_to:
+        qs = qs.filter(updated_at__lte=updated_to)
+    qs = qs.order_by(ordering, "id")
 
     total = qs.count()
     offset = (page - 1) * limit

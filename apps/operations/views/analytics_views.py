@@ -1,5 +1,7 @@
 """Admin analytics views — trends and provider comparison."""
 
+from decimal import Decimal
+
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -15,8 +17,14 @@ from common.utils import parse_int_query_param
 
 
 def _trend_to_list(qs) -> list:
+    """Chart trend points are numeric on the wire — Decimal sums (e.g. credit
+    amounts) are coerced to float so the JSON encoder doesn't emit a string
+    that breaks frontend arithmetic on `value`."""
     return [
-        {"day": row["day"].isoformat(), "value": row["value"]}
+        {
+            "day": row["day"].isoformat(),
+            "value": float(row["value"]) if isinstance(row["value"], Decimal) else (row["value"] or 0),
+        }
         for row in qs
     ]
 

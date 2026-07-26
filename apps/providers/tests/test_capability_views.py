@@ -25,15 +25,22 @@ class CapabilitiesViewTests(TestCase):
         data = response.json()["data"]
 
         slugs = [c["slug"] for c in data["capabilities"]]
-        self.assertIn("fast", slugs)
+        self.assertIn("oneprompt-free", slugs)
+        self.assertNotIn("fast", slugs)  # legacy development stub is disabled
         self.assertNotIn("deepseek-flash", slugs)  # seeded inactive
 
         for capability in data["capabilities"]:
             self.assertEqual(
-                set(capability.keys()), {"slug", "label", "description", "is_default"}
+                set(capability.keys()),
+                {"slug", "label", "description", "is_default", "is_free"},
             )
 
-        self.assertEqual(data["default_slug"], "fast")
+        self.assertEqual(data["default_slug"], "oneprompt-free")
+        free_route = next(
+            item for item in data["capabilities"]
+            if item["slug"] == "oneprompt-free"
+        )
+        self.assertTrue(free_route["is_free"])
 
     def test_activating_a_route_makes_it_appear(self):
         CapabilityRoute.objects.filter(slug="deepseek-flash").update(is_active=True)

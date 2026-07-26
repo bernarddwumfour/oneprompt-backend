@@ -15,6 +15,7 @@ def _serialize_route(route) -> dict:
         "label": route.label,
         "description": route.description,
         "is_default": route.is_default,
+        "is_free": route.is_free,
     }
 
 

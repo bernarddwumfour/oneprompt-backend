@@ -158,3 +158,94 @@ class AdminTicketViewsTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {self.user_token}",
         )
         self.assertEqual(response.status_code, 403)
+
+    # -- bulk -------------------------------------------------------------
+
+    def _bulk(self, token, action, ids):
+        return self.client.post(
+            "/api/v1/operations/support/tickets/bulk-action",
+            data=json.dumps({"action": action, "ids": ids}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+    def _second_ticket_id(self):
+        resp = self.client.post(
+            "/api/v1/support/tickets",
+            data=json.dumps({"subject": "Second", "content": "Also help"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.user_token}",
+        )
+        return resp.json()["data"]["ticket"]["id"]
+
+    def test_bulk_close_sets_status_to_closed(self):
+        # Regression test: bulk action names ("close"/"resolve") are verbs,
+        # but SupportTicket.status stores the adjective form ("closed").
+        # A prior version of this endpoint passed "close" straight through
+        # as the status value, which is not a valid TICKET_STATUS_CHOICES
+        # member — every bulk close/resolve silently failed 100% of the
+        # time. This test would fail against that regression.
+        response = self._bulk(self.admin_token, "close", [self.ticket_id])
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["success_count"], 1)
+        self.assertEqual(data["failed_count"], 0)
+
+        detail = self.client.get(
+            f"/api/v1/operations/support/tickets/{self.ticket_id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        ).json()["data"]
+        self.assertEqual(detail["ticket"]["status"], "closed")
+
+    def test_bulk_resolve_sets_status_to_resolved(self):
+        response = self._bulk(self.admin_token, "resolve", [self.ticket_id])
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["success_count"], 1)
+
+        detail = self.client.get(
+            f"/api/v1/operations/support/tickets/{self.ticket_id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        ).json()["data"]
+        self.assertEqual(detail["ticket"]["status"], "resolved")
+
+    def test_bulk_close_multiple_tickets(self):
+        second_id = self._second_ticket_id()
+        response = self._bulk(self.admin_token, "close", [self.ticket_id, second_id])
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["success_count"], 2)
+        self.assertEqual(data["failed_count"], 0)
+
+    def test_bulk_unknown_ticket_id_reported_as_failed(self):
+        import uuid
+
+        response = self._bulk(self.admin_token, "close", [str(uuid.uuid4())])
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["success_count"], 0)
+        self.assertEqual(data["failed_count"], 1)
+        self.assertEqual(data["failed"][0]["reason"], "Not found.")
+
+    def test_bulk_partial_failure(self):
+        import uuid
+
+        response = self._bulk(
+            self.admin_token, "close", [self.ticket_id, str(uuid.uuid4())]
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["success_count"], 1)
+        self.assertEqual(data["failed_count"], 1)
+
+    def test_bulk_requires_admin(self):
+        response = self._bulk(self.user_token, "close", [self.ticket_id])
+        self.assertEqual(response.status_code, 403)
+
+    def test_bulk_invalid_action_rejected(self):
+        response = self._bulk(self.admin_token, "delete", [self.ticket_id])
+        self.assertEqual(response.status_code, 422)
+
+    def test_bulk_empty_ids_rejected(self):
+        response = self._bulk(self.admin_token, "close", [])
+        self.assertEqual(response.status_code, 422)

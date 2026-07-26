@@ -3,10 +3,10 @@
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from shared.models import SystemLog
+from apps.operations.selectors.audit_selectors import list_audit_logs
 from common.decorators import jwt_required, role_required
 from common.responses import APIResponse
-from common.utils import parse_pagination
+from common.utils import parse_ordering, parse_pagination
 
 
 @csrf_exempt
@@ -14,23 +14,23 @@ from common.utils import parse_pagination
 @jwt_required
 @role_required("admin")
 def audit_log_list_view(request):
-    severity = request.GET.get("severity", "")
-    app_name = request.GET.get("app_name", "")
-    action = request.GET.get("action", "")
-
-    qs = SystemLog.objects.order_by("-created_at")
-    if severity:
-        qs = qs.filter(severity=severity)
-    if app_name:
-        qs = qs.filter(app_name=app_name)
-    if action:
-        qs = qs.filter(action=action)
-
     try:
         page, limit = parse_pagination(request)
+        ordering = parse_ordering(request, {
+            "created_at": "created_at", "severity": "severity",
+            "app_name": "app_name", "action": "action",
+            "status_code": "status_code", "user_email": "user_email",
+        }, "-created_at")
     except ValueError as e:
         return APIResponse.bad_request(str(e))
 
+    qs = list_audit_logs(
+        search=request.GET.get("search", ""),
+        severity=request.GET.get("severity", ""),
+        app_name=request.GET.get("app_name", ""),
+        action=request.GET.get("action", ""),
+        ordering=ordering,
+    )
     total = qs.count()
     offset = (page - 1) * limit
     logs = qs[offset : offset + limit]
@@ -44,6 +44,7 @@ def audit_log_list_view(request):
                     "action": log.action,
                     "severity": log.severity,
                     "description": log.description,
+                    "status_code": log.status_code,
                     "user_email": log.user_email,
                     "ip_address": log.ip_address,
                     "path": log.path,

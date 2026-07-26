@@ -33,6 +33,7 @@ def _load_provider_classes():
         _PROVIDER_CLASSES["qwen"] = OpenAIChatCompatibleProvider
         _PROVIDER_CLASSES["gemini"] = OpenAIChatCompatibleProvider
         _PROVIDER_CLASSES["chatgpt"] = OpenAIChatCompatibleProvider
+        _PROVIDER_CLASSES["cloudflare"] = OpenAIChatCompatibleProvider
     except ImportError:
         logger.warning("openai_compatible_provider not available yet")
 
@@ -52,6 +53,10 @@ def provider_has_api_key(provider_key: str) -> bool:
     """Return True if the provider has a configured API key (or is stub)."""
     if provider_key == "stub":
         return True
+    if provider_key == "cloudflare":
+        return bool(
+            _provider_api_key(provider_key) and _provider_base_url(provider_key)
+        )
     return bool(_provider_api_key(provider_key))
 
 
@@ -136,6 +141,7 @@ def _provider_base_url(provider_key: str) -> str:
             settings, "OPENAI_BASE_URL", "https://api.openai.com/v1"
         ),
         "claude": getattr(settings, "ANTHROPIC_BASE_URL", ""),
+        "cloudflare": getattr(settings, "CLOUDFLARE_BASE_URL", ""),
     }
     return mapping.get(provider_key, "")
 
@@ -147,5 +153,6 @@ def _provider_api_key(provider_key: str) -> str:
         "gemini": getattr(settings, "GEMINI_API_KEY", ""),
         "chatgpt": getattr(settings, "OPENAI_API_KEY", ""),
         "claude": getattr(settings, "ANTHROPIC_API_KEY", ""),
+        "cloudflare": getattr(settings, "CLOUDFLARE_API_KEY", ""),
     }
     return mapping.get(provider_key, "")

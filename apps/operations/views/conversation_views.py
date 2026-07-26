@@ -14,7 +14,7 @@ from apps.conversations.selectors.conversation_selectors import (
 from apps.operations.selectors.operations_selectors import list_conversations
 from common.decorators import jwt_required, role_required
 from common.responses import APIResponse
-from common.utils import parse_pagination
+from common.utils import parse_date_range_param, parse_ordering, parse_pagination
 
 
 @csrf_exempt
@@ -22,12 +22,21 @@ from common.utils import parse_pagination
 @jwt_required
 @role_required("admin")
 def conversation_list_view(request):
-    user_email = request.GET.get("user_email", "")
+    search = request.GET.get("search", request.GET.get("user_email", ""))
     try:
         page, limit = parse_pagination(request)
+        ordering = parse_ordering(request, {
+            "updated_at": "updated_at", "created_at": "created_at",
+            "title": "title", "user_email": "user__email",
+            "message_count": "message_count",
+        }, "-updated_at")
     except ValueError as e:
         return APIResponse.bad_request(str(e))
-    result = list_conversations(user_email=user_email, page=page, limit=limit)
+    updated_from, updated_to = parse_date_range_param(request, "updated_at")
+    result = list_conversations(
+        search=search, page=page, limit=limit, ordering=ordering,
+        updated_from=updated_from, updated_to=updated_to,
+    )
     return APIResponse.success(data=result)
 
 

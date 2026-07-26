@@ -106,6 +106,16 @@ class RegistryTests(TestCase):
             self.assertFalse(registry.provider_has_api_key("gemini"))
         with override_settings(GEMINI_API_KEY="a-key"):
             self.assertTrue(registry.provider_has_api_key("gemini"))
+        with override_settings(
+            CLOUDFLARE_API_KEY="a-key",
+            CLOUDFLARE_BASE_URL="",
+        ):
+            self.assertFalse(registry.provider_has_api_key("cloudflare"))
+        with override_settings(
+            CLOUDFLARE_API_KEY="a-key",
+            CLOUDFLARE_BASE_URL="https://api.cloudflare.test/account/ai/v1",
+        ):
+            self.assertTrue(registry.provider_has_api_key("cloudflare"))
 
     def test_list_active_routes_excludes_inactive(self):
         CapabilityRoute.objects.create(
@@ -169,12 +179,17 @@ class RegistryTests(TestCase):
 
 
 class SeedMigrationTests(TestCase):
-    """The data migration should leave exactly the stub route active."""
+    """The data migration should install the free route as the default."""
 
     def test_seed_migration_state(self):
         active = list(CapabilityRoute.objects.filter(is_active=True))
-        self.assertEqual([r.slug for r in active], ["fast"])
-        self.assertTrue(CapabilityRoute.objects.get(slug="fast").is_default)
+        self.assertEqual([r.slug for r in active], ["oneprompt-free"])
+        free_route = CapabilityRoute.objects.get(slug="oneprompt-free")
+        self.assertTrue(free_route.is_default)
+        self.assertTrue(free_route.is_free)
+        stub_route = CapabilityRoute.objects.get(slug="fast")
+        self.assertFalse(stub_route.is_default)
+        self.assertFalse(stub_route.is_active)
 
         inactive_slugs = set(
             CapabilityRoute.objects.filter(is_active=False).values_list(
@@ -184,6 +199,7 @@ class SeedMigrationTests(TestCase):
         self.assertEqual(
             inactive_slugs,
             {
+                "fast",
                 "deepseek-flash", "deepseek-pro",
                 "qwen-turbo", "qwen-plus", "qwen-max",
                 "chatgpt-fast", "chatgpt-pro",

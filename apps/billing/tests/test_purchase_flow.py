@@ -54,6 +54,32 @@ class CreatePurchaseTests(TestCase):
         self.assertEqual(purchase.amount_minor_units, 1500)
         self.assertEqual(purchase.amount_credits, Decimal("75.00"))
 
+    def test_checkout_callback_preserves_chat_url_context(self):
+        conversation_id = "123e4567-e89b-12d3-a456-426614174000"
+        with patch.object(
+            PaystackClient,
+            "initialize_transaction",
+            return_value={
+                "data": {
+                    "reference": "paystack-context",
+                    "authorization_url": "https://paystack.test/pay/context",
+                }
+            },
+        ) as initialize:
+            result = create_purchase(
+                user=self.user,
+                credit_pack_id=str(self.pack.id),
+                return_context={
+                    "conversation": conversation_id,
+                    "model": "claude-fast",
+                },
+            )
+
+        callback_url = initialize.call_args.kwargs["callback_url"]
+        self.assertIn(f"purchase_id={result['purchase_id']}", callback_url)
+        self.assertIn(f"conversation={conversation_id}", callback_url)
+        self.assertIn("model=claude-fast", callback_url)
+
     def test_flexible_purchase_rejects_fractional_or_below_minimum_amounts(self):
         for amount in (9, 10.5, -10):
             with self.subTest(amount=amount), self.assertRaises(ValueError):
